@@ -435,3 +435,23 @@ still belongs to `splunk` too, since it sits alongside rather than inside.
 
 The app itself must be re-checked for compatibility on major version jumps — 1.4.5 covers
 through 10.5, so you're clear for the 10.2.7 and 10.4.x steps.
+
+
+
+## The app status page is broken replace with this search.
+
+```bash
+sourcetype=gitforsplunk index=_internal
+| eval time = strftime(_time, "%Y-%m-%d %H:%M")
+| eval etime1 = _time
+| eval etime2 = _time + 1
+| eval no_changes1 = if(like(_raw, "%no changes added to commit%"), 1, null())
+| eval no_changes2 = if(like(_raw, "%EXITCODE: 1%") AND like(_raw, "%No changes%"), 1, null())
+| sort - _time
+| foreach status_*
+    [eval <<MATCHSTR>> = case(isnull(<<FIELD>>), null(), <<FIELD>>==0, "OK", true(), "Error")]
+| eval commit_files = if((isnotnull(no_changes1) OR isnotnull(no_changes2)) AND status_commit_files == 1, "No Changes", commit_files)
+| table etime1 etime2 time host commit_message runtime check_status add_files commit_files change_message commit_details push
+| rename time as Time host as Host commit_message as "Commit message" runtime as Duration check_status as "Check status" add_files as "Add files" commit_files as "Commit files" change_message as "Update message" commit_details as "Show details" push as "Push"
+```
+
