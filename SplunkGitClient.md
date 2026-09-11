@@ -7,6 +7,8 @@ and pushing to Gitea at `192.168.203.139`.
 - **App version:** 1.4.5 (13 Aug 2026) — Apache 2.0, developer supported
 - **Compatible:** Splunk 10.5 → 9.0 (covers your 10.2.7 target)
 - **Does not work on Splunk Cloud**
+- **1.4.4 / 1.4.5 have no UI for creating inputs** — `inputs.conf` must be written by
+  hand. See section 2.
 
 ---
 
@@ -95,6 +97,21 @@ versions:
 cat /opt/splunk/etc/apps/git_for_splunk/README/inputs.conf.spec
 ```
 
+### Version warning — no UI for creating inputs in 1.4.x
+
+**In 1.4.4 and 1.4.5 the app provides no way to create an input from the web UI.** The
+setup / "create input" page is absent, and Splunk's generic *Settings → Data inputs*
+page does not expose the `gitforsplunk` input type either. The input must be written by
+hand in `local/inputs.conf` from the shell — see section 8.
+
+Verified against both 1.4.4 and 1.4.5. The last version tested that does offer input
+creation in the UI is **1.3.2**.
+
+If you want the UI, install 1.3.2 instead and accept the older compatibility matrix.
+Otherwise stay on 1.4.5 and configure by hand — the file is short and section 8 gives
+it in full. Hand-editing is arguably better for an MSP anyway: the stanza can be
+templated and pushed with the rest of your app content rather than clicked in per box.
+
 ---
 
 ## 3. Create the external repository
@@ -113,10 +130,17 @@ sudo -u splunk git --git-dir=/opt/splunk_git_repo/etc.git \
 sudo -u splunk git --git-dir=/opt/splunk_git_repo/etc.git config core.bare false
 sudo -u splunk git --git-dir=/opt/splunk_git_repo/etc.git config core.worktree /opt/splunk/etc
 
-# Commit identity — set per-repo so SH01 and SH02 stay distinguishable
+# Commit identity — set per-repo so each search head stays distinguishable
 sudo -u splunk git --git-dir=/opt/splunk_git_repo/etc.git config user.name  "splunk-sh01"
 sudo -u splunk git --git-dir=/opt/splunk_git_repo/etc.git config user.email "splunk-sh01@example.com"
 ```
+
+> **`splunk-sh01` is a label you choose — use the search head's hostname.** Whatever you
+> put in `user.name` is what appears as the commit author in Gitea, so the point is that
+> a glance at the history tells you which server produced the change. If the box is
+> `splunk-sh-prod-01`, use that. Check with `hostname -s` and use the result.
+>
+> The email does not have to resolve or receive mail; it just has to be unique per host.
 
 There is deliberately **no `.git` file or directory left in `/opt/splunk/etc`**. The app
 is given both paths explicitly, so nothing needs to point back.
@@ -126,6 +150,11 @@ Define a shorthand for the rest of this guide:
 ```bash
 alias sgit='sudo -u splunk git --git-dir=/opt/splunk_git_repo/etc.git'
 ```
+
+> **This alias is for this setup session only.** It lives in the current shell and
+> disappears when you log out — nothing depends on it afterwards. The app calls git
+> itself using the paths in `inputs.conf`, not your shell. Don't add it to `.bashrc`;
+> if you ever need it again during troubleshooting, just paste the line back in.
 
 ---
 
@@ -149,6 +178,10 @@ sudo -u splunk ssh-keygen -t ed25519 -N '' \
 sudo -u splunk bash -c \
   'ssh-keyscan -H 192.168.203.139 > /opt/splunk_git_repo/.ssh/known_hosts'
 ```
+
+> **`192.168.203.139` is the Gitea server**, not this search head. Substitute your own
+> Gitea host — IP or DNS name, but use whichever form you'll also put in the remote URL
+> in section 7, because `known_hosts` entries are matched on the literal host string.
 
 Pin the SSH command into the repo config:
 
@@ -262,6 +295,15 @@ sgit remote add origin git@192.168.203.139:admin/searchhead1.git
 sgit push -u origin main
 ```
 
+> **Both halves of that remote URL are yours to change.** `192.168.203.139` is the Gitea
+> server's address, and `admin/searchhead1.git` is `<owner>/<repository>` exactly as
+> created in Gitea — `admin` is the account or organisation that owns it, `searchhead1`
+> is the repository name. Read them off the repo's page in the Gitea web UI rather than
+> typing from memory; a wrong owner or name fails with the same "repository does not
+> exist" error as a permissions problem, which sends you debugging the wrong thing.
+>
+> The `git@` part does **not** change — see section 5.
+
 Then test the way splunkd will actually run it — empty environment, no `$HOME`:
 
 ```bash
@@ -276,7 +318,9 @@ fails here but worked above, your config is depending on `$HOME` somewhere.
 
 ## 8. Configure the modular input
 
-Create `/opt/splunk/etc/apps/git_for_splunk/local/inputs.conf`:
+In 1.4.4 and 1.4.5 this is the **only** way to create the input — there is no UI for it
+(see the version warning in section 2). Create
+`/opt/splunk/etc/apps/git_for_splunk/local/inputs.conf` by hand:
 
 ```ini
 [gitforsplunk://sh01_git]
@@ -321,20 +365,39 @@ email alert action that reports which files changed — worth enabling once the 
 
 ---
 
-## 10. Repeat for SH02
+## 10. Additional search heads
 
-Everything above, with these changed:
+Sections 1–9 are a **per-server procedure**. If you have more than one search head to
+version, run the whole thing again on each box, locally on that box. Nothing is shared
+between them — no central step, no push from one host to another.
 
-- Keypair: `/opt/splunk_git_repo/.ssh/gitea_sh02`
-- Deploy key title in Gitea: `splunk-sh02`
-- **A different Gitea repo** — a key can only be a deploy key on one repo, and two SHs
-  pushing to one repo will fight over the branch
-- Input stanza: `[gitforsplunk://sh02_git]`
-- Commit identity: `splunk-sh02` / `splunk-sh02@example.com`
+Per server, these values must be unique:
 
-If these two are members of the same search head cluster, don't run this on both. Splunk
-already replicates config between cluster members, so you'd get near-identical diffs in
-two repos. Pick one member, or run it on the deployer.
+| Item | SH01 | SH02 | SH*n* |
+|---|---|---|---|
+| Gitea repository | `admin/searchhead1` | `admin/searchhead2` | one per host |
+| Keypair | `.ssh/gitea_sh01` | `.ssh/gitea_sh02` | one per host |
+| Deploy key title in Gitea | `splunk-sh01` | `splunk-sh02` | the hostname |
+| Input stanza | `[gitforsplunk://sh01_git]` | `[gitforsplunk://sh02_git]` | any unique name |
+| `user.name` / `user.email` | `splunk-sh01` | `splunk-sh02` | the hostname |
+
+Everything else — `/opt/splunk_git_repo`, the paths in `inputs.conf`, the `.gitignore` —
+is identical on every server and can be templated.
+
+**Each host needs its own repository and its own keypair.** A key can only be a deploy
+key on one repository in Gitea, and two hosts pushing to one repository will fight over
+the branch. Both constraints point the same way: one repo per search head.
+
+### Do not run this on every member of a search head cluster
+
+If several of these boxes are members of the same SHC, pick **one** and run it there
+only. Splunk already replicates configuration between cluster members, so running it on
+each would produce near-identical histories in separate repositories — twice the noise,
+no extra information, and confusion about which repo is authoritative when they briefly
+disagree mid-replication.
+
+Independent search heads serving different tenants are the opposite case: each is its
+own source of truth and each needs its own repository.
 
 ---
 
