@@ -1,4 +1,4 @@
-# Gitea Setup — RedHat Linux & Ubuntu (Internal Git)
+# Gitea Setup — Oracle Linux & Ubuntu (Internal Git)
 
 Self-hosted Gitea (free open-source community edition), used as version control for
 Splunk search head configuration.
@@ -301,200 +301,41 @@ starting on SQLite.
 
 ---
 
-## Per-search-head repository setup
+## Client setup — separate document
 
-### Naming
+Everything past this point on the *client* side — creating repositories, generating
+per-search-head keys, deploy keys, `.gitignore`, the first push, and the
+`git_for_splunk` app — is covered in **[SplunkGitClient.md](SplunkGitClient.md)**.
 
-One repo per search head. Prefix them if this instance will ever hold repos for
-other systems or clients — an unprefixed `searchhead1` gets ambiguous fast:
+Three server-side facts worth knowing before you go there:
 
-- `splunk-searchhead-01`
-- `splunk-searchhead-02`
+- **Deploy keys are read-only by default.** There is no toggle to grant write to an
+  existing key — it must be deleted and re-added with *Enable Write Access* ticked.
+  This is the single most common failure when onboarding a client.
+- **The SSH user is always `git`.** Clone URLs are `git@<host>:owner/repo.git`
+  regardless of which Gitea account owns the repo. Identity comes from the key.
+- **Set the default branch before creating repos.** Site Administration → Repository →
+  `DEFAULT_BRANCH`. A mismatch between this and what clients push shows up as an
+  apparently empty repository in the web UI.
 
-Consider creating an org (e.g. `splunk`) to own them rather than a personal account.
-If the owning account is renamed or disabled, clone URLs change.
-
-Create both repos **empty** — no README, no `.gitignore` from the UI. Pushing
-existing content into a repo with an initial commit produces an
-unrelated-histories merge.
-
-### The SSH user is always `git`
-
-Clone URLs are `git@192.168.203.139:owner/repo.git` regardless of which Gitea
-account owns the repo. Identity comes from the key, not the username.
-
-### Generate a key per search head
-
-Store the key at an **absolute path**, not under a home directory — the Splunk
-modular input runs under `splunkd` and may have `$HOME` unset or pointing at `/root`.
-
-```bash
-sudo mkdir -p /opt/splunk_git_repo/.ssh
-sudo chown splunk:splunk /opt/splunk_git_repo/.ssh
-sudo chmod 700 /opt/splunk_git_repo/.ssh
-
-sudo -u splunk ssh-keygen -t ed25519 -N '' \
-  -f /opt/splunk_git_repo/.ssh/gitea_sh01 \
-  -C "splunk-sh01@example"
-
-sudo -u splunk bash -c \
-  'ssh-keyscan -H 192.168.203.139 > /opt/splunk_git_repo/.ssh/known_hosts'
-```
-
-> Oracle Linux / RHEL family only: `sudo restorecon -Rv /opt/splunk_git_repo`
-
-### Add the deploy key in Gitea
-
-Repo → **Settings** → **Deploy Keys** → **Add Deploy Key**
-
-1. Title: `splunk-sh01` (not the default `root@hostname` — two machines produce
-   indistinguishable entries)
-2. Paste the `.pub` contents
-3. **Tick "Enable Write Access"**
-
-> Deploy keys are **read-only by default**. There is no toggle to grant write to an
-> existing key — it must be deleted and re-added. This is the single most common
-> failure in this setup.
-
-**Why deploy keys and not a user SSH key:** a user key grants that key the account's
-full permissions across every repo on the instance. A deploy key is scoped to one
-repo, so a compromised search head can only reach its own history. A given key can be
-a deploy key on only one repo — hence one keypair per search head.
-
-### Verify
-
-```bash
-# 1. Authentication
-ssh -T git@192.168.203.139
-# Expect: "Hi there! You've successfully authenticated with the deploy key named ...
-#          but Gitea does not provide shell access."
-# "PTY allocation request failed on channel 0" is normal, not an error.
-
-# 2. Repo path and read access
-git ls-remote git@192.168.203.139:admin/searchhead1.git; echo "exit=$?"
-# exit=0 with no output = repo exists and is empty.
-
-# 3. Network path from the search head (not from the Gitea box)
-nc -zv 192.168.203.139 22
-```
-
-Step 1 succeeding proves only that the key is valid — **not** that it has write
-access, and not which repo it's scoped to.
-
----
-
-## First real push
-
-### Default branch
-
-```bash
-git config --global init.defaultBranch main
-```
-
-Do this on both search heads before initialising. Otherwise `git init` creates
-`master`, and `git push -u origin main` fails with:
-
-```
-error: src refspec main does not match any
-```
-
-Fix on an existing repo:
-
-```bash
-git branch -m master main
-```
-
-Confirm Gitea's expectation matches: **Site Administration → Repository →
-`DEFAULT_BRANCH`**. If Gitea expects `main` and the repo only has `master`, the web
-UI shows an empty repo view until the default branch is corrected in repo settings.
-
-### Commit identity
-
-Deploy keys authenticate the push, but the commit author comes from git config.
-Without it, commits are attributed to `splunk@<hostname>.(none)`.
-
-Set **per-repo**, not globally, so SH01 and SH02 stay distinguishable.
-
-### .gitignore — write this BEFORE the first `git add`
-
-`$SPLUNK_HOME/etc` has secrets scattered through it. Committing `auth/splunk.secret`
-means every encrypted password on that instance is decryptable by anyone with repo
-read access. Removing it afterwards requires rewriting history on both repos.
-
-```gitignore
-# --- Secrets ---
-auth/
-passwd
-*/passwd
-*/local/passwd
-*.secret
-*.pem
-*.key
-*.p12
-*.jks
-
-# --- Runtime state / bulk data ---
-var/
-instance.cfg
-splunk.version
-splunk-launch.conf
-*/lookups/
-apps/*/lookups/
-users/*/*/history/
-
-# --- Noise ---
-*.bak
-*.old
-*.tmp
-*.pyc
-*.swp
-*~
-.DS_Store
-ui-prefs.conf
-licenses/
-modules/
-openldap/
-```
-
-Review against the actual tree before committing — some lookups are genuinely config
-rather than bulk data.
-
-Verify nothing sensitive is staged:
-
-```bash
-git status --short | grep -Ei 'secret|passwd|\.pem|\.key|auth/'
-```
-
-That should return nothing.
-
----
-
-## Push contention between the two search heads
-
-This is a git-level concern, not a database one.
-
-| Situation | Approach |
-|---|---|
-| Two independent SHs (different tenants) | Separate repos. No contention. |
-| Two members of the same SHC | Don't have both commit. Splunk already replicates config between cluster members — two members pushing near-identical diffs to one repo produces noisy, conflicting history. Commit from one designated member, or from the deployer. |
-| Both must write to one repo | Give each a branch (`sh01`, `sh02`), or have the commit script run `git pull --rebase` before `git push` and retry once on failure. |
-
----
+Create repositories **empty** — no README, no `.gitignore` from the UI. Clients are
+pushing existing content, and an initial commit produces an unrelated-histories merge.
 
 ## Troubleshooting
 
+Server-side issues only. For push, key and client errors see
+[SplunkGitClient.md](SplunkGitClient.md).
+
 | Error | Cause |
 |---|---|
-| `Deploy Key: N:name is not authorized to write to owner/repo` | Write access not enabled on the deploy key. Delete and re-add with the box ticked. |
-| `error: src refspec main does not match any` | Local branch is `master`. Run `git branch -m master main`. |
-| `Permission denied (publickey)` | Running as a different user than the one holding the key, or the wrong identity is being offered. Diagnose with `ssh -vT git@192.168.203.139`. |
-| `PTY allocation request failed on channel 0` | Not an error. Expected — Gitea refuses shell access by design. |
-| Push hangs on first run from cron | Host key not in `known_hosts`. Run `ssh-keyscan` as the committing user. |
-| Repo shows empty in web UI despite a successful push | Default branch mismatch. Repo Settings → Branches → set default. |
 | `database is locked` | Raise `SQLITE_TIMEOUT`, confirm `SQLITE_JOURNAL_MODE = WAL`. Persistent occurrences mean it's time for PostgreSQL. |
 | Connection refused on 3000 (Oracle Linux) | `firewall-cmd --list-ports` — the rule wasn't reloaded. |
 | Connection refused on 3000 (Ubuntu) | `ufw status` — rule missing, or ufw was enabled after the rule was added. |
-| Permission errors that make no sense (Oracle Linux) | Check `ausearch -m avc -ts recent` before assuming it's a Gitea problem. |
+| Permission errors that make no sense (Oracle Linux) | Check `sudo ausearch -m avc -ts recent` before assuming it's a Gitea problem. |
+| Permission errors that make no sense (Ubuntu) | Not AppArmor — no Gitea profile exists. Check ownership under `/var/lib/gitea` and `/etc/gitea`. |
+| Service won't start after an upgrade | `journalctl -u gitea -n 50`. Database migrations run on first start of a new version and are one-way — restore from the pre-upgrade dump. |
+| `PTY allocation request failed on channel 0` when testing SSH | Not an error. Expected — Gitea refuses shell access by design. |
+| Repo shows empty in the web UI despite a client reporting a successful push | Default branch mismatch. Repo Settings → Branches → set default. |
 
 ---
 
