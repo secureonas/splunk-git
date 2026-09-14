@@ -5,10 +5,9 @@ on a search head, with the git metadata stored **outside** the Splunk install pa
 and pushing to Gitea at `192.168.203.139`.
 
 - **App version:** 1.4.5 (13 Aug 2026) — Apache 2.0, developer supported
-- **Compatible:** Splunk 10.5 → 9.0 (covers your 10.2.7 target)
 - **Does not work on Splunk Cloud**
 - **1.4.4 / 1.4.5 have no UI for creating inputs** — `inputs.conf` must be written by
-  hand. See section 2.
+  hand. . The inputs should now be configured from Settings > Data Inputs > git_for_splunk.  See section 2.
 
 ---
 
