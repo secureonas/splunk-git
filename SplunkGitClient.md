@@ -4,10 +4,9 @@ Installing Splunkbase app **4182** (*Git Version Control for Splunk*, Chris Youn
 on a search head, with the git metadata stored **outside** the Splunk install path
 and pushing to Gitea at `192.168.203.139`.
 
-- **App version:** 1.4.5 (13 Aug 2026) — Apache 2.0, developer supported
-- **Does not work on Splunk Cloud**
-- **1.4.4 / 1.4.5 have no UI for creating inputs** — `inputs.conf` must be written by
-  hand. . The inputs should now be configured from Settings > Data Inputs > git_for_splunk.  See section 2.
+- **App version:** 1.4.6 (14 Sept 2026) — Apache 2.0, developer supported
+
+
 
 ---
 
@@ -96,20 +95,6 @@ versions:
 cat /opt/splunk/etc/apps/git_for_splunk/README/inputs.conf.spec
 ```
 
-### Version warning — no UI for creating inputs in 1.4.x
-
-**In 1.4.4 and 1.4.5 the app provides no way to create an input from the web UI.** The
-setup / "create input" page is absent, and Splunk's generic *Settings → Data inputs*
-page does not expose the `gitforsplunk` input type either. The input must be written by
-hand in `local/inputs.conf` from the shell — see section 8.
-
-Verified against both 1.4.4 and 1.4.5. The last version tested that does offer input
-creation in the UI is **1.3.2**.
-
-If you want the UI, install 1.3.2 instead and accept the older compatibility matrix.
-Otherwise stay on 1.4.5 and configure by hand — the file is short and section 8 gives
-it in full. Hand-editing is arguably better for an MSP anyway: the stanza can be
-templated and pushed with the rest of your app content rather than clicked in per box.
 
 ---
 
